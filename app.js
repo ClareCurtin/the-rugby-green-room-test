@@ -129,13 +129,15 @@ async function savePreferences(){
 window.savePreferences=savePreferences;
 async function loadVenues(){
  venues=await api("/rest/v1/green_venues?select=name,city,address,description,website,screening_status&published=eq.true&order=city.asc,name.asc");
+ // Keep the location picker aligned with actual published venue locations.
+ const venueSelect=$("city");if(venueSelect){for(const city of [...new Set(venues.map(v=>v.city))].sort()){if(![...venueSelect.options].some(o=>o.value.toLowerCase()===city.toLowerCase())){const option=new Option(city,city);venueSelect.add(option);}}}
  const mapNote=$("screen-find").querySelector(".micro");if(mapNote)mapNote.textContent="Real venues · confirm your match";
  drawVenues();
 }
 function drawVenues(){
  const city=$("city")?.value||"Dublin",host=document.querySelector("#screen-find .venue-list");
  if(!host)return;
- const list=venues.filter(v=>v.city===city);
+ const list=venues.filter(v=>v.city.toLowerCase()===city.toLowerCase());
  $("selected-city").textContent=city;
  const note=$("radius-note");if(note)note.textContent=list.length?"Rugby-friendly places in "+city:"No listed pubs yet in "+city;
  host.innerHTML=list.length?list.map(v=>`<div class="rgr-card"><span class="rgr-tag">Rugby viewing venue</span><h3>${escapeHtml(v.name)}</h3><p>${escapeHtml(v.address)}</p><p>${escapeHtml(v.description)}</p><small>Check the specific match with the pub before travelling.</small><div style="margin-top:13px"><a class="rgr-btn" href="${escapeHtml(v.website)}" target="_blank" rel="noopener noreferrer">Venue website ↗</a></div></div>`).join(""):'<div class="rgr-card"><h3>Help put '+escapeHtml(city)+' on the map</h3><p>We haven’t yet confirmed a venue here. Try another city or ask the local Green Room.</p><button class="rgr-btn" onclick="go(\'rooms\')">Ask your local room</button></div>';
@@ -145,7 +147,7 @@ async function loadCollections(){
  collections=await api("/rest/v1/otb_collections?select=slug,name,category,description,sort_order&published=eq.true&order=sort_order.asc");
  const cards=[...document.querySelectorAll("#screen-shop .shop-card")];cards.forEach((card,i)=>{if(!collections[i])return;card.querySelector("strong").textContent=collections[i].name;card.querySelector("span").textContent=collections[i].category;card.querySelector("small").textContent="See the collection ↗";});
  const header=document.querySelector("#screen-shop .shop-brandline");if(header)header.textContent="Off The Bench Ireland · rugby lifestyle collections";
- const desc=document.querySelector("#screen-shop .shop-info");if(desc)desc.innerHTML="<strong>Serious about rugby. Not so serious about ourselves.</strong><p>Discover the genuine Off The Bench collection concepts and their rugby-inspired designs. Online ordering and stock information are not available yet.</p>";
+ const desc=document.querySelector("#screen-shop .shop-info");if(desc)desc.innerHTML="<strong>Made for the love of rugby. Designed for life beyond the game.</strong><p>Explore nine Off The Bench lifestyle collections featuring original rugby humour and everyday essentials. These are product concepts; stock and checkout are not available yet.</p>";
 }
 function normalizeFixtures(data){
  let byKey=new Map();
@@ -168,24 +170,32 @@ async function loadFixtures(){
  const comps=[...new Set(matches.map(x=>x.competition))].sort(),years=[...new Set(matches.map(x=>x.match_date.slice(0,4)))].sort().reverse();
  $("gf-competition").innerHTML='<option value="__all__">All competitions</option>'+comps.map(c=>'<option value="'+escapeHtml(c)+'">'+escapeHtml(c)+'</option>').join("");
  $("gf-season").innerHTML='<option value="__all__">All seasons</option>'+years.map(y=>'<option value="'+y+'">'+y+'</option>').join("");
- if(years.includes("2026"))$("gf-season").value="2026";
+ // Show the next match across competitions and seasons by default.
+ $("gf-season").value="__all__";
+ $("gf-competition").value="__all__";
  $("gf-count").textContent="Choose a competition, season or team";
  $("gf-directory").innerHTML=comps.map(c=>'<button class="gf-dir-pill" data-comp="'+escapeHtml(c)+'">'+escapeHtml(c)+'</button>').join("");
  $("gf-directory").querySelectorAll("button").forEach(b=>b.onclick=()=>{$("gf-competition").value=b.dataset.comp;drawFixtures();});
- const matchSelect=$("match");if(matchSelect){matchSelect.innerHTML='<option value="">Any match</option>'+matches.filter(x=>x.match_date>=new Date().toISOString().slice(0,10)).slice(0,120).map(m=>'<option value="'+escapeHtml(m.home_team+" v "+m.away_team)+'">'+escapeHtml(m.home_team+" v "+m.away_team+" · "+m.match_date)+'</option>').join("");}
+ const matchSelect=$("match");if(matchSelect){matchSelect.innerHTML='<option value="">Any match</option>'+matches.filter(isFutureFixture).sort((a,b)=>fixtureTime(a)-fixtureTime(b)).slice(0,120).map(m=>'<option value="'+escapeHtml(m.home_team+" v "+m.away_team)+'">'+escapeHtml(m.home_team+" v "+m.away_team+" · "+m.match_date)+'</option>').join("");}
  drawFixtures();homeFixture();
 }
 function homeFixture(){
- const next=matches.find(m=>m.match_date>=new Date().toISOString().slice(0,10));
+ const next=matches.filter(m=>isFutureFixture(m)).sort((a,b)=>fixtureTime(a)-fixtureTime(b))[0];
  let el=$("rgr-home-match");if(!el)return;
  el.innerHTML=next?`<div class="rgr-card"><small>${escapeHtml(next.competition)}</small><h3>${escapeHtml(next.home_team)} v ${escapeHtml(next.away_team)}</h3><p>${escapeHtml(dateLabel(next.kickoff_at)||next.match_date)}</p><button class="rgr-btn" onclick="go('fixtures')">Find more matches</button></div>`:'<div class="rgr-card"><h3>Find your next match</h3><p>Explore the rugby calendar and choose the teams you follow.</p><button class="rgr-btn" onclick="go(\'fixtures\')">Browse fixtures</button></div>';
 }
+function fixtureTime(m){return new Date(m.kickoff_at||m.match_date+"T23:59:59Z").getTime();}
+function isFutureFixture(m){return m.home_score==null&&m.away_score==null&&fixtureTime(m)>=Date.now();}
 function drawFixtures(){
  const comp=$("gf-competition").value,year=$("gf-season").value,search=$("gf-search").value.toLowerCase().trim(),irish=$("gf-irish").classList.contains("gf-active");
  const rows=matches.filter(m=>(comp==="__all__"||m.competition===comp)&&(year==="__all__"||m.match_date.startsWith(year))&&(!search||(m.home_team+" "+m.away_team).toLowerCase().includes(search))&&(!irish||/ireland|leinster|munster|ulster|connacht/i.test(m.home_team+" "+m.away_team)));
- const count=$("gf-count");if(count)count.textContent=rows.length+" matches";
- const root=$("gf-results");root.innerHTML=(rows.slice(0,120).map(m=>`<div class="rgr-card"><small>${escapeHtml(m.competition)} · ${escapeHtml(m.match_date)}</small><h3>${escapeHtml(m.home_team)} ${m.home_score==null?"v":m.home_score+" – "+m.away_score} ${escapeHtml(m.away_team)}</h3><p>${m.kickoff_at?escapeHtml(dateLabel(m.kickoff_at)):"Kick-off time to be confirmed"}${m.venue?" · "+escapeHtml(m.venue):""}</p></div>`).join(""))||'<div class="rgr-card">No matches found for your filters.</div>';
- if(rows.length>120)root.insertAdjacentHTML("beforeend",'<div class="rgr-status">Showing first 120 matches. Narrow your filters to see more.</div>');
+ const future=rows.filter(isFutureFixture).sort((a,b)=>fixtureTime(a)-fixtureTime(b));
+ const past=rows.filter(m=>!isFutureFixture(m)).sort((a,b)=>fixtureTime(b)-fixtureTime(a));
+ const count=$("gf-count");if(count)count.textContent=future.length+" upcoming · "+past.length+" past matches";
+ const root=$("gf-results");
+ const card=m=>'<div class="rgr-card"><small>'+escapeHtml(m.competition)+' · '+escapeHtml(m.match_date)+'</small><h3>'+escapeHtml(m.home_team)+' '+(m.home_score==null?"v":m.home_score+" – "+m.away_score)+' '+escapeHtml(m.away_team)+'</h3><p>'+(m.kickoff_at?escapeHtml(dateLabel(m.kickoff_at)):"Kick-off time to be confirmed")+(m.venue?" · "+escapeHtml(m.venue):"")+'</p></div>';
+ root.innerHTML='<section aria-label="Upcoming rugby fixtures"><h2 style="padding:18px 0 4px">Upcoming fixtures</h2>'+(future.length?future.slice(0,120).map(card).join(""):'<div class="rgr-card">No upcoming fixtures found for these filters.</div>')+'</section><details class="rgr-past" style="margin-top:24px"><summary style="font-weight:800;font-size:19px;cursor:pointer">Past matches ('+past.length+')</summary>'+past.slice(0,120).map(card).join("")+(past.length>120?'<p class="rgr-status">Showing most recent 120 results. Narrow the filters to see more.</p>':'')+'</details>';
+ if(future.length>120)root.insertAdjacentHTML("beforeend",'<div class="rgr-status">Showing the first 120 upcoming fixtures. Narrow your filters to see more.</div>');
 }
 window.gfDraw=drawFixtures;
 async function loadRooms(){
@@ -196,8 +206,9 @@ async function loadRooms(){
  list?.querySelectorAll("button").forEach(b=>b.onclick=()=>openRoom(b.dataset.id));
  const local=rooms.find(x=>x.kind==="local"&&x.city===$("local-place")?.value);
  if(local){$("local-title").textContent=local.name;const btn=$("join-local-btn");btn.textContent="Join "+local.name;btn.onclick=()=>joinLocal(local.id);}
+ else {$("local-title").textContent=$("local-place").value+" Green Room";$("join-local-btn").textContent="Room not available yet";$("join-local-btn").onclick=()=>alert("This local Green Room has not been set up yet.");}
 }
-window.updateLocalRoom=()=>{const local=rooms.find(x=>x.kind==="local"&&x.city===$("local-place").value);if(!local)return;$("local-title").textContent=local.name;$("join-local-btn").textContent="Join "+local.name;$("join-local-btn").onclick=()=>joinLocal(local.id);};
+window.updateLocalRoom=()=>{const local=rooms.find(x=>x.kind==="local"&&x.city===$("local-place").value);if(!local){$("local-title").textContent=$("local-place").value+" Green Room";$("join-local-btn").textContent="Room not available yet";$("join-local-btn").onclick=()=>alert("This local Green Room has not been set up yet.");return;}$("local-title").textContent=local.name;$("join-local-btn").textContent="Join "+local.name;$("join-local-btn").onclick=()=>joinLocal(local.id);};
 window.joinLocalRoom=async()=>{const local=rooms.find(x=>x.kind==="local"&&x.city===$("local-place").value);if(local)await joinLocal(local.id);};
 async function joinLocal(id){
  try{await api("/rest/v1/rpc/join_local_green_room",{method:"POST",body:{p_room:id}});await openRoom(id);}
@@ -206,12 +217,19 @@ async function joinLocal(id){
 async function createPrivate(ev){
  ev.preventDefault();let btn=$("rgr-create-btn");btn.disabled=true;
  const name=$("rgr-room-name").value.trim(),match=$("rgr-room-match").value.trim();
- try{const id=await api("/rest/v1/rpc/create_private_green_room",{method:"POST",body:{p_name:name,p_match:match}});await loadRooms();await openRoom(id);$("rgr-room-name").value="";$("rgr-room-match").value="";}
+ $("rgr-room-error").textContent="Creating your private Green Room…";
+ try{const raw=await api("/rest/v1/rpc/create_private_green_room",{method:"POST",body:{p_name:name,p_match:match}});const id=typeof raw==="string"?raw:raw?.id||raw?.[0]?.id;
+  if(!id)throw Error("Room creation did not return a room ID.");
+  await openRoom(id);
+  if(!activeRoom||activeRoom.id!==id)throw Error("Your room was created but could not be opened. Please refresh your rooms.");
+  $("rgr-room-name").value="";$("rgr-room-match").value="";$("rgr-room-error").textContent="";}
+
  catch(e){$("rgr-room-error").textContent=e.message;}finally{btn.disabled=false;}
 }
 async function openRoom(id){
- activeRoom=rooms.find(r=>r.id===id);if(!activeRoom){await loadRooms();activeRoom=rooms.find(r=>r.id===id);}
- if(!activeRoom)return;
+ activeRoom=rooms.find(r=>r.id===id);
+ if(!activeRoom){const direct=await api("/rest/v1/green_rooms?select=id,kind,name,city,description,match_label,match_kickoff,invite_code&id=eq."+encodeURIComponent(id));activeRoom=direct?.[0]||null;if(activeRoom)rooms.push(activeRoom);}
+ if(!activeRoom)throw Error("This Green Room could not be found or you do not have permission to access it.");
  const screen=$("screen-family");
  screen.innerHTML=`<div class="rgr-room"><p style="font-size:12px;letter-spacing:.12em;color:#986f2d">${activeRoom.kind==="family"?"INVITE-ONLY · FAMILY & FRIENDS":"LOCAL GREEN ROOM"}</p><h1>${escapeHtml(activeRoom.name)}</h1>${activeRoom.match_label?'<p>Watching: '+escapeHtml(activeRoom.match_label)+'</p>':'<p>Find your crowd. Share the match.</p>'}<div class="rgr-row">${activeRoom.kind==="family"?'<button class="rgr-btn" id="rgr-invite">Invite family & friends ↗</button>':''}<button class="rgr-btn secondary" id="rgr-back-rooms">All Green Rooms</button></div><div class="rgr-chat" id="rgr-messages"><p>Loading messages…</p></div><form id="rgr-chat-form" class="rgr-inline"><input id="rgr-chat-text" class="rgr-input" maxlength="1200" autocomplete="off" required placeholder="Message your room…"><button class="rgr-btn" type="submit">Send</button></form><p class="rgr-status" id="rgr-chat-status">Only members of this room can read these messages.</p></div>`;
  $("rgr-back-rooms").onclick=()=>{activeRoom=null;window.go("rooms");};
