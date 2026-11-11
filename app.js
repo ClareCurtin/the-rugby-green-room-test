@@ -149,17 +149,56 @@ async function loadCollections(){
  const header=document.querySelector("#screen-shop .shop-brandline");if(header)header.textContent="Off The Bench Ireland · rugby lifestyle collections";
  const desc=document.querySelector("#screen-shop .shop-info");if(desc)desc.innerHTML="<strong>Made for the love of rugby. Designed for life beyond the game.</strong><p>Explore nine Off The Bench lifestyle collections featuring original rugby humour and everyday essentials. These are product concepts; stock and checkout are not available yet.</p>";
 }
+// Competition titles are public-facing; source feed slugs must never appear in the UI.
+const competitionNames=Object.freeze({
+ "six-nations":"Six Nations (Men)",
+ "Six Nations (Men)":"Six Nations (Men)",
+ "guinness-six-nations":"Six Nations (Men)",
+ "six-nations-women":"Six Nations (Women)",
+ "womens-six-nations":"Six Nations (Women)",
+ "women-six-nations":"Six Nations (Women)",
+ "Six Nations (Women)":"Six Nations (Women)",
+ "urc":"United Rugby Championship",
+ "United Rugby Championship":"United Rugby Championship",
+ "champions-cup":"Investec Champions Cup",
+ "European Rugby Champions Cup":"Investec Champions Cup",
+ "Investec Champions Cup":"Investec Champions Cup",
+ "challenge-cup":"EPCR Challenge Cup",
+ "EPCR Challenge Cup":"EPCR Challenge Cup",
+ "nations-championship":"World Rugby Nations Championship",
+ "Nations Championship":"World Rugby Nations Championship",
+ "World Rugby Nations Championship":"World Rugby Nations Championship",
+ "world-cup":"Rugby World Cup",
+ "Rugby World Cup (Men)":"Rugby World Cup",
+ "Rugby World Cup":"Rugby World Cup"
+});
+const excludedCompetitionKeys=new Set(["premiership","Premiership Rugby","Gallagher Premiership","Gallagher PREM"]);
+function competitionTitle(raw){
+ const key=String(raw||"").trim();
+ return competitionNames[key] || key.replace(/-/g," ").replace(/\\b\\w/g,c=>c.toUpperCase()) || "Other Rugby";
+}
 function normalizeFixtures(data){
- let byKey=new Map();
+ const byKey=new Map();
  function add(row){
-  const comp=row.competition||row.competition_name||row.competition_key||"Rugby";
-  const day=row.match_date||"";if(!day||!row.home_team||!row.away_team)return;
-  const k=day+"|"+[row.home_team,row.away_team].sort().join("|")+"|"+comp;
-  let item=byKey.get(k);
-  if(!item){item={competition:comp,match_date:day,kickoff_at:row.kickoff_at,home_team:row.home_team,away_team:row.away_team,venue:row.venue,home_score:row.home_score,away_score:row.away_score};byKey.set(k,item);}
-  else if(item.home_score==null&&row.home_score!=null){item.home_score=row.home_score;item.away_score=row.away_score;}
+  const source=String(row.competition||row.competition_name||row.competition_key||"").trim();
+  if(excludedCompetitionKeys.has(source))return;
+  const comp=competitionTitle(source),day=row.match_date||"";
+  if(!day||!row.home_team||!row.away_team)return;
+  const teams=[row.home_team,row.away_team].map(t=>t.trim().toLowerCase()).sort();
+  const key=day+"|"+teams.join("|")+"|"+comp;
+  const prior=byKey.get(key);
+  const match={competition:comp,match_date:day,kickoff_at:row.kickoff_at,home_team:row.home_team,away_team:row.away_team,venue:row.venue,home_score:row.home_score,away_score:row.away_score};
+  if(!prior){byKey.set(key,match);return;}
+  if(!prior.kickoff_at&&match.kickoff_at)prior.kickoff_at=match.kickoff_at;
+  if(!prior.venue&&match.venue)prior.venue=match.venue;
+  // Use verified full-time results where the matching fixture record lacks a score.
+  if(prior.home_score==null&&match.home_score!=null&&match.away_score!=null){
+   const sameOrder=prior.home_team.trim().toLowerCase()===match.home_team.trim().toLowerCase();
+   prior.home_score=sameOrder?match.home_score:match.away_score;
+   prior.away_score=sameOrder?match.away_score:match.home_score;
+  }
  }
- for(const group of ["staging","canonical","archive"])for(const m of (data[group]||[]))add(m);
+ for(const group of ["staging","canonical","archive"])for(const row of (data[group]||[]))add(row);
  return [...byKey.values()].sort((a,b)=>(a.kickoff_at||a.match_date).localeCompare(b.kickoff_at||b.match_date));
 }
 async function loadFixtures(){
