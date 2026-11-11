@@ -59,6 +59,7 @@ const login=document.createElement("div");login.id="rgr-auth";login.hidden=true;
 <button class="secondary" type="button" id="rgr-switch">New here? Create an account</button>
 <p id="rgr-auth-msg" role="status"></p></div>`;
 document.body.append(login);
+login.querySelector('img').src=document.querySelector('.brandbar img')?.src||'';
 let registering=false;
 $("rgr-switch").onclick=()=>{
  registering=!registering;$("rgr-signup-name").hidden=!registering;
