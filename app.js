@@ -178,6 +178,9 @@ function competitionTitle(raw){
  const key=String(raw||"").trim();
  return competitionNames[key] || key.replace(/-/g," ").replace(/\\b\\w/g,c=>c.toUpperCase()) || "Other Rugby";
 }
+function fixtureTeamName(name,competition){
+ return competition==="Six Nations (Women)"?String(name||"").replace(/\s+Women\s*$/i,"").trim():String(name||"");
+}
 function normalizeFixtures(data){
  const byKey=new Map();
  function add(row){
@@ -216,13 +219,13 @@ async function loadFixtures(){
  $("gf-count").textContent="Choose a competition, season or team";
  $("gf-directory").innerHTML=comps.map(c=>'<button class="gf-dir-pill" data-comp="'+escapeHtml(c)+'">'+escapeHtml(c)+'</button>').join("");
  $("gf-directory").querySelectorAll("button").forEach(b=>b.onclick=()=>{$("gf-competition").value=b.dataset.comp;drawFixtures();});
- const matchSelect=$("match");if(matchSelect){matchSelect.innerHTML='<option value="">Any match</option>'+matches.filter(isFutureFixture).sort((a,b)=>fixtureTime(a)-fixtureTime(b)).slice(0,120).map(m=>'<option value="'+escapeHtml(m.home_team+" v "+m.away_team)+'">'+escapeHtml(m.home_team+" v "+m.away_team+" · "+m.match_date)+'</option>').join("");}
+ const matchSelect=$("match");if(matchSelect){matchSelect.innerHTML='<option value="">Any match</option>'+matches.filter(isFutureFixture).sort((a,b)=>fixtureTime(a)-fixtureTime(b)).slice(0,120).map(m=>'<option value="'+escapeHtml(m.home_team+" v "+m.away_team)+'">'+escapeHtml(fixtureTeamName(m.home_team,m.competition)+" v "+fixtureTeamName(m.away_team,m.competition)+" · "+m.match_date)+'</option>').join("");}
  drawFixtures();homeFixture();
 }
 function homeFixture(){
  const next=matches.filter(m=>isFutureFixture(m)).sort((a,b)=>fixtureTime(a)-fixtureTime(b))[0];
  let el=$("rgr-home-match");if(!el)return;
- el.innerHTML=next?`<div class="rgr-card"><small>${escapeHtml(next.competition)}</small><h3>${escapeHtml(next.home_team)} v ${escapeHtml(next.away_team)}</h3><p>${escapeHtml(dateLabel(next.kickoff_at)||next.match_date)}</p><button class="rgr-btn" onclick="go('fixtures')">Find more matches</button></div>`:'<div class="rgr-card"><h3>Find your next match</h3><p>Explore the rugby calendar and choose the teams you follow.</p><button class="rgr-btn" onclick="go(\'fixtures\')">Browse fixtures</button></div>';
+ el.innerHTML=next?`<div class="rgr-card"><small>${escapeHtml(next.competition)}</small><h3>${escapeHtml(fixtureTeamName(next.home_team,next.competition))} v ${escapeHtml(fixtureTeamName(next.away_team,next.competition))}}</h3><p>${escapeHtml(dateLabel(next.kickoff_at)||next.match_date)}</p><button class="rgr-btn" onclick="go('fixtures')">Find more matches</button></div>`:'<div class="rgr-card"><h3>Find your next match</h3><p>Explore the rugby calendar and choose the teams you follow.</p><button class="rgr-btn" onclick="go(\'fixtures\')">Browse fixtures</button></div>';
 }
 function fixtureTime(m){return new Date(m.kickoff_at||m.match_date+"T23:59:59Z").getTime();}
 function isFutureFixture(m){return m.home_score==null&&m.away_score==null&&fixtureTime(m)>=Date.now();}
@@ -233,7 +236,7 @@ function drawFixtures(){
  const past=rows.filter(m=>!isFutureFixture(m)).sort((a,b)=>fixtureTime(b)-fixtureTime(a));
  const count=$("gf-count");if(count)count.textContent=future.length+" upcoming · "+past.length+" past matches";
  const root=$("gf-results");
- const card=m=>'<div class="rgr-card"><small>'+escapeHtml(m.competition)+' · '+escapeHtml(m.match_date)+'</small><h3>'+escapeHtml(m.home_team)+' '+(m.home_score==null?"v":m.home_score+" – "+m.away_score)+' '+escapeHtml(m.away_team)+'</h3><p>'+(m.kickoff_at?escapeHtml(dateLabel(m.kickoff_at)):"Kick-off time to be confirmed")+(m.venue?" · "+escapeHtml(m.venue):"")+'</p></div>';
+ const card=m=>'<div class="rgr-card"><small>'+escapeHtml(m.competition)+' · '+escapeHtml(m.match_date)+'</small><h3>'+escapeHtml(fixtureTeamName(m.home_team,m.competition))+' '+(m.home_score==null?"v":m.home_score+" – "+m.away_score)+' '+escapeHtml(fixtureTeamName(m.away_team,m.competition))+'</h3><p>'+(m.kickoff_at?escapeHtml(dateLabel(m.kickoff_at)):"Kick-off time to be confirmed")+(m.venue?" · "+escapeHtml(m.venue):"")+'</p></div>';
  root.innerHTML='<section aria-label="Upcoming rugby fixtures"><h2 style="padding:18px 0 4px">Upcoming fixtures</h2>'+(future.length?future.slice(0,120).map(card).join(""):'<div class="rgr-card">No upcoming fixtures found for these filters.</div>')+'</section><details class="rgr-past" style="margin-top:24px"><summary style="font-weight:800;font-size:19px;cursor:pointer">Past matches ('+past.length+')</summary>'+past.slice(0,120).map(card).join("")+(past.length>120?'<p class="rgr-status">Showing most recent 120 results. Narrow the filters to see more.</p>':'')+'</details>';
  if(future.length>120)root.insertAdjacentHTML("beforeend",'<div class="rgr-status">Showing the first 120 upcoming fixtures. Narrow your filters to see more.</div>');
 }
