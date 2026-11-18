@@ -155,6 +155,7 @@ const competitionNames=Object.freeze({
  "Six Nations (Men)":"Six Nations (Men)",
  "guinness-six-nations":"Six Nations (Men)",
  "six-nations-women":"Six Nations (Women)",
+ "six-nations-womens":"Six Nations (Women)",
  "womens-six-nations":"Six Nations (Women)",
  "women-six-nations":"Six Nations (Women)",
  "Six Nations (Women)":"Six Nations (Women)",
