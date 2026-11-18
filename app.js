@@ -6,6 +6,65 @@ const API=BASE+"/functions/v1/rugby-phone-test/api/fixtures";
 const KEY=window.RGR_PUBLIC_KEY;
 const $=id=>document.getElementById(id);
 let token="",refresh="",person=null,profile=null,rooms=[],venues=[],collections=[],matches=[],activeRoom=null,refreshTimer=null,roomPoll=null;
+let notificationPoll=null,notificationStarted=false;
+const roomLastSeen=new Map(),roomUnread=new Map();
+let bannerTimeout=null;
+function unreadTotal(){return [...roomUnread.values()].reduce((a,b)=>a+b,0);}
+function updateNotificationBadges(){
+ const n=unreadTotal();
+ const badge=$("rgr-unread-badge");
+ if(badge){badge.textContent=n?n+" unread":"";badge.hidden=!n;}
+ for(const el of document.querySelectorAll("[data-rgr-room-unread]")){
+  const c=roomUnread.get(el.dataset.rgrRoomUnread)||0;
+  el.textContent=c?" ("+c+" new)":"";el.hidden=!c;
+ }
+}
+function showMessageAlert(room,author){
+ const toast=$("rgr-message-alert");
+ if(!toast)return;
+ const title=$("rgr-alert-title"),detail=$("rgr-alert-detail");
+ title.textContent="New message in "+room.name;
+ detail.textContent=(author||"A supporter")+" has posted in your Green Room.";
+ toast.hidden=false;
+ toast.onclick=()=>{toast.hidden=true;openRoom(room.id).catch(e=>alert(e.message));};
+ clearTimeout(bannerTimeout);bannerTimeout=setTimeout(()=>toast.hidden=true,10000);
+ // Browser notifications work only while this page is running; background push requires separate setup.
+ if(document.hidden&&"Notification" in window&&Notification.permission==="granted"){
+  try{const note=new Notification("Off The Bench · "+room.name,{body:(author||"Someone")+" has posted in your Green Room.",tag:"rgr-room-"+room.id});note.onclick=()=>{window.focus();openRoom(room.id).catch(()=>{});note.close();};}catch(e){console.warn("Browser alert unavailable",e);}
+ }
+}
+async function pollPrivateRoomMessages(){
+ if(!person||notificationPoll===null)return;
+ const privateRooms=rooms.filter(x=>x.kind==="family");
+ for(const room of privateRooms){
+  try{
+   const data=await api("/rest/v1/green_room_messages?select=id,room_id,author_id,author_name,created_at&room_id=eq."+encodeURIComponent(room.id)+"&order=created_at.desc&limit=1");
+   const msg=data?.[0];if(!msg)continue;
+   const prev=roomLastSeen.get(room.id);
+   roomLastSeen.set(room.id,{id:msg.id,created_at:msg.created_at});
+   if(!prev)continue; // initial poll is a baseline, not an alert for old history
+   if(msg.id===prev.id||msg.author_id===person.id)continue;
+   if(new Date(msg.created_at)<=new Date(prev.created_at))continue;
+   if(activeRoom?.id!==room.id){
+    roomUnread.set(room.id,(roomUnread.get(room.id)||0)+1);
+    showMessageAlert(room,msg.author_name);
+   }
+  }catch(e){console.warn("Unable to check Green Room messages",e);}
+ }
+ updateNotificationBadges();
+}
+function startMessageNotifications(){
+ if(notificationPoll!==null)clearInterval(notificationPoll);
+ notificationPoll=setInterval(()=>{pollPrivateRoomMessages().catch(e=>console.warn(e));},8000);
+ pollPrivateRoomMessages().catch(e=>console.warn(e));
+}
+async function enableBrowserNotifications(){
+ const status=$("rgr-notification-status");
+ if(!("Notification" in window)){if(status)status.textContent="Phone alerts are not supported by this browser. In-app alerts will still work.";return;}
+ try{const p=await Notification.requestPermission();if(status)status.textContent=p==="granted"?"Browser alerts enabled while the app is running. Full phone push notifications are a separate beta feature.":p==="denied"?"Alerts are blocked in your browser settings. In-app alerts still work.":"Permission not granted. In-app alerts still work.";}
+ catch(e){if(status)status.textContent="Browser notifications could not be enabled on this device.";}
+}
+
 const escapeHtml=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const dateLabel=t=>t?new Date(t).toLocaleString(undefined,{weekday:"short",day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"Time to be confirmed";
 const css=document.createElement("style");css.textContent=`
@@ -70,7 +129,7 @@ $("rgr-switch").onclick=()=>{
 function saveSession(v){
  if(v.access_token){token=v.access_token;refresh=v.refresh_token||refresh;localStorage.setItem("rgr_session",JSON.stringify({token,refresh}));}
 }
-function clearSession(){token="";refresh="";localStorage.removeItem("rgr_session");person=null;profile=null;login.hidden=false;clearInterval(roomPoll);}
+function clearSession(){clearInterval(notificationPoll);notificationPoll=null;roomLastSeen.clear();roomUnread.clear();token="";refresh="";localStorage.removeItem("rgr_session");person=null;profile=null;login.hidden=false;clearInterval(roomPoll);}
 async function auth(path,body){
  const res=await fetch(BASE+"/auth/v1/"+path,{method:"POST",headers:{"content-type":"application/json","apikey":KEY},body:JSON.stringify(body)});
  const val=await res.json().catch(()=>({}));if(!res.ok)throw Error(val.msg||val.error_description||val.message||val.error||"Sign-in failed");return val;
@@ -245,8 +304,9 @@ async function loadRooms(){
  rooms=await api("/rest/v1/green_rooms?select=id,kind,name,city,description,match_label,match_kickoff,invite_code&order=created_at.asc");
  const privateRooms=rooms.filter(x=>x.kind==="family");
  const list=$("rgr-private-list");
- if(list)list.innerHTML=privateRooms.length?privateRooms.map(x=>`<button class="rgr-btn secondary" type="button" data-id="${x.id}">${escapeHtml(x.name)}${x.match_label?" · "+escapeHtml(x.match_label):""}</button>`).join(""):'<p style="font-size:13px">Your private rooms will appear here. Create one to invite family or friends.</p>';
+ if(list)list.innerHTML=privateRooms.length?privateRooms.map(x=>`<button class="rgr-btn secondary" type="button" data-id="${x.id}">${escapeHtml(x.name)}<span data-rgr-room-unread="${x.id}" hidden></span>${x.match_label?" · "+escapeHtml(x.match_label):""}</button>`).join(""):'<p style="font-size:13px">Your private rooms will appear here. Create one to invite family or friends.</p>';
  list?.querySelectorAll("button").forEach(b=>b.onclick=()=>openRoom(b.dataset.id));
+ updateNotificationBadges();
  const local=rooms.find(x=>x.kind==="local"&&x.city===$("local-place")?.value);
  if(local){$("local-title").textContent=local.name;const btn=$("join-local-btn");btn.textContent="Join "+local.name;btn.onclick=()=>joinLocal(local.id);}
  else {$("local-title").textContent=$("local-place").value+" Green Room";$("join-local-btn").textContent="Room not available yet";$("join-local-btn").onclick=()=>alert("This local Green Room has not been set up yet.");}
@@ -273,6 +333,7 @@ async function openRoom(id){
  activeRoom=rooms.find(r=>r.id===id);
  if(!activeRoom){const direct=await api("/rest/v1/green_rooms?select=id,kind,name,city,description,match_label,match_kickoff,invite_code&id=eq."+encodeURIComponent(id));activeRoom=direct?.[0]||null;if(activeRoom)rooms.push(activeRoom);}
  if(!activeRoom)throw Error("This Green Room could not be found or you do not have permission to access it.");
+ roomUnread.delete(id);updateNotificationBadges();
  const screen=$("screen-family");
  screen.innerHTML=`<div class="rgr-room"><p style="font-size:12px;letter-spacing:.12em;color:#986f2d">${activeRoom.kind==="family"?"INVITE-ONLY · FAMILY & FRIENDS":"LOCAL GREEN ROOM"}</p><h1>${escapeHtml(activeRoom.name)}</h1>${activeRoom.match_label?'<p>Watching: '+escapeHtml(activeRoom.match_label)+'</p>':'<p>Find your crowd. Share the match.</p>'}<div class="rgr-row">${activeRoom.kind==="family"?'<button class="rgr-btn" id="rgr-invite">Invite family & friends ↗</button>':''}<button class="rgr-btn secondary" id="rgr-back-rooms">All Green Rooms</button></div><div class="rgr-chat" id="rgr-messages"><p>Loading messages…</p></div><form id="rgr-chat-form" class="rgr-inline"><input id="rgr-chat-text" class="rgr-input" maxlength="1200" autocomplete="off" required placeholder="Message your room…"><button class="rgr-btn" type="submit">Send</button></form><p class="rgr-status" id="rgr-chat-status">Only members of this room can read these messages.</p></div>`;
  $("rgr-back-rooms").onclick=()=>{activeRoom=null;window.go("rooms");};
@@ -320,7 +381,16 @@ function setUpInterface(){
  const next=document.createElement("div");next.id="rgr-home-match";$("screen-home").querySelector(".section-title").insertAdjacentElement("afterend",next);
  const searchNote=$("screen-find").querySelector(".map-label");if(searchNote)searchNote.textContent="FIND RUGBY NEAR YOU";
  const n=$("screen-rooms").querySelector(".local-room-card");if(n){let feed=n.querySelector(".mini-feed");if(feed)feed.remove();let label=n.querySelector(".eyebrow");if(label)label.textContent="LIVE LOCAL RUGBY CHAT";let p=n.querySelector("p");if(p)p.textContent="Join supporters in your selected county or city. Start a discussion, share match-day plans and ask where the game is on.";}
- const holder=document.createElement("div");holder.innerHTML=`<div class="section-title" style="margin:25px 0 10px"><h2>Your private rooms</h2></div><div id="rgr-private-list" class="rgr-room-list"></div><div class="rgr-card" style="margin-top:18px"><h3>Create a family or friends Green Room</h3><p>Pick a room name and a match. Then share a private invite link on WhatsApp. Everyone signs in using their own account.</p><form id="rgr-create-form"><label class="rgr-field">Group name<input id="rgr-room-name" class="rgr-input" placeholder="The Friday Night Crew" minlength="2" maxlength="90" required></label><label class="rgr-field">Match to watch (optional)<input id="rgr-room-match" class="rgr-input" placeholder="Ireland v France"></label><button id="rgr-create-btn" type="submit" class="rgr-btn">Create private room</button><p id="rgr-room-error" class="rgr-status"></p></form></div>`;
+ const notice=document.createElement("div");
+ notice.id="rgr-notification-panel";notice.className="rgr-card";notice.style.margin="12px 0";
+ notice.innerHTML='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><strong>Green Room messages</strong><span id="rgr-unread-badge" hidden style="background:#a42d2d;color:#fff;border-radius:18px;padding:3px 9px;font-size:12px"></span></div><p style="font-size:13px;margin:7px 0">New-message alerts appear while the test app is open. Enable browser alerts where supported.</p><button type="button" class="rgr-btn secondary" id="rgr-notifications-enable">Enable browser alerts</button><p id="rgr-notification-status" class="rgr-status" aria-live="polite"></p>';
+ $("screen-rooms").querySelector(".pad").prepend(notice);
+ $("rgr-notifications-enable").onclick=enableBrowserNotifications;
+ const alertBox=document.createElement("button");alertBox.type="button";alertBox.id="rgr-message-alert";alertBox.hidden=true;
+ alertBox.style.cssText="position:fixed;top:12px;left:12px;right:12px;z-index:99999;width:calc(100% - 24px);max-width:470px;margin:0 auto;padding:14px 18px;text-align:left;background:#e9ede9;border:2px solid #144b34;border-radius:13px;box-shadow:0 8px 26px #0004;color:#183d30;cursor:pointer";
+ alertBox.innerHTML='<strong style="display:block" id="rgr-alert-title"></strong><span id="rgr-alert-detail" style="display:block;margin-top:4px"></span><small style="display:block;margin-top:5px">Tap to open Green Room</small>';
+ document.body.append(alertBox);
+  const holder=document.createElement("div");holder.innerHTML=`<div class="section-title" style="margin:25px 0 10px"><h2>Your private rooms</h2></div><div id="rgr-private-list" class="rgr-room-list"></div><div class="rgr-card" style="margin-top:18px"><h3>Create a family or friends Green Room</h3><p>Pick a room name and a match. Then share a private invite link on WhatsApp. Everyone signs in using their own account.</p><form id="rgr-create-form"><label class="rgr-field">Group name<input id="rgr-room-name" class="rgr-input" placeholder="The Friday Night Crew" minlength="2" maxlength="90" required></label><label class="rgr-field">Match to watch (optional)<input id="rgr-room-match" class="rgr-input" placeholder="Ireland v France"></label><button id="rgr-create-btn" type="submit" class="rgr-btn">Create private room</button><p id="rgr-room-error" class="rgr-status"></p></form></div>`;
  $("screen-rooms").querySelector(".pad").append(holder);
  $("rgr-create-form").onsubmit=createPrivate;
  const privateCard=$("screen-rooms").querySelector(".private-room-card");if(privateCard){let b=privateCard.querySelector("button");if(b){b.textContent="CREATE OR OPEN A PRIVATE ROOM →";b.onclick=()=>{$("rgr-create-form").scrollIntoView({behavior:"smooth"});};}}
@@ -333,6 +403,7 @@ async function start(){
  const jobs=await Promise.allSettled([loadFixtures(),loadVenues(),loadCollections(),loadRooms()]);
  for(let i=0;i<jobs.length;i++)if(jobs[i].status==="rejected")console.warn("Green Room data",i,jobs[i].reason);
  await checkInvite();
+ startMessageNotifications();
 }
 async function init(){
  setUpInterface();const prior=JSON.parse(localStorage.getItem("rgr_session")||"{}");token=prior.token||"";refresh=prior.refresh||"";
